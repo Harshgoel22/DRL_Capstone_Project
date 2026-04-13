@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import os
 
-# Already set the weights of best model based on achieving success
+# updated best model weights mentioned in report (giving more success)
 
 # Globals
 _MODEL = None
@@ -11,7 +11,7 @@ _HX, _CX = None, None
 
 LSTM_H_DIM = 128
 DECAY = 0.95          # soft reset factor
-MAX_STEPS = 800       # fallback hard reset
+MAX_STEPS = 1000      # fallback hard reset
 
 step_counter = 0
 
@@ -29,80 +29,86 @@ def _load_once():
         return
 
     submission_dir = os.path.dirname(__file__)
-    wpath = os.path.join(submission_dir, "model_weights/best_weights_on_success_basis.pth")
+    wpath = os.path.join(submission_dir, "./model_weights/best_weights_on_success_basis.pth")
 
     class KnowledgeNet(nn.Module):
-        def __init__( self, state_dim=18, action_dim=5, feature_dims=[256, 256],
-            lstm_dim=128, forward_dims=[256], inverse_dims=[256]
-        ):
-            super().__init__()
+        def __init__(self, inDim=18, outDim=5, f_hDim=[512, 256], lstm_hDim=128,
+                     for_hDim=[256, 256], inv_hDim=[256, 256], activation=nn.ReLU):
+            super(KnowledgeNet, self).__init__()
+            self.activation = activation
 
-            # feature extractor
-            self.state_dim = state_dim
-            self.action_dim = action_dim
-
+            # Encoder
+            prevDim = inDim
             layers = []
-            prev = self.state_dim
-            for dim in feature_dims:
-                layers.append(nn.Linear(prev, dim))
-                layers.append(nn.ReLU())
-                prev = dim
-            self.feature_net = nn.Sequential(*layers)
+            for nextDim in f_hDim:
+                layers.append(nn.Linear(prevDim, nextDim))
+                layers.append(self.activation())
+                prevDim = nextDim
+            self.features = nn.Sequential(*layers)
 
-            # lstm
-            self.lstm = nn.LSTMCell(prev, lstm_dim)
+            # LSTM
+            self.lstmCell = nn.LSTMCell(prevDim, lstm_hDim)
 
-            # latent projection
+            # Q head
+            self.values = nn.Linear(lstm_hDim, 1)
+            self.advantages = nn.Linear(lstm_hDim, outDim)
+
+            # bad state head
+            self.bad_state_head = nn.Linear(lstm_hDim, 1)
+
+            # Forward model
+            prevDim = lstm_hDim + outDim
+            forward_layers = []
+            for nextDim in for_hDim:
+                forward_layers.append(nn.Linear(prevDim, nextDim))
+                forward_layers.append(self.activation())
+                prevDim = nextDim
+            forward_layers.append(nn.Linear(prevDim, lstm_hDim))
+            self.forward_model = nn.Sequential(*forward_layers)
+
+            # Inverse model
+            prevDim = 2 * lstm_hDim
+            inverse_layers = []
+            for nextDim in inv_hDim:
+                inverse_layers.append(nn.Linear(prevDim, nextDim))
+                inverse_layers.append(self.activation())
+                prevDim = nextDim
+            inverse_layers.append(nn.Linear(prevDim, outDim))
+            self.inverse_model = nn.Sequential(*inverse_layers)
+
+            # latent represenation
             self.latent_proj = nn.Sequential(
-                nn.Linear(lstm_dim, lstm_dim),
+                nn.Linear(lstm_hDim, lstm_hDim),
                 nn.ReLU(),
-                nn.LayerNorm(lstm_dim)
+                nn.LayerNorm(lstm_hDim)
             )
 
-            # Policy Head (Q-values)
-            self.q_head = nn.Linear(lstm_dim, self.action_dim)
-
-            # value head
-            self.value_head = nn.Linear(lstm_dim, 1)
-
-            # Forward Model
-            f_layers = []
-            prev = lstm_dim + self.action_dim
-            for dim in forward_dims:
-                f_layers.append(nn.Linear(prev, dim))
-                f_layers.append(nn.ReLU())
-                prev = dim
-            f_layers.append(nn.Linear(prev, lstm_dim))
-            self.forward_model = nn.Sequential(*f_layers)
-
-            # inverse Model
-            i_layers = []
-            prev = 2 * lstm_dim
-            for dim in inverse_dims:
-                i_layers.append(nn.Linear(prev, dim))
-                i_layers.append(nn.ReLU())
-                prev = dim
-            i_layers.append(nn.Linear(prev, self.action_dim))
-            self.inverse_model = nn.Sequential(*i_layers)
+            # Bump Head (for decinding which bump is bad)
+            self.bump_head = nn.Sequential(
+                nn.Linear(lstm_hDim+2, 128),
+                nn.ReLU(),
+                nn.Linear(128, 1)
+            )
 
         def forward(self, x, hx, cx):
-            x = self.feature_net(x)
+            x_f = self.features(x)
+            hx, cx = self.lstmCell(x_f, (hx, cx))
 
-            hx, cx = self.lstm(x, (hx, cx))
-            z = self.latent_proj(hx)
-            q = self.q_head(z)
+            z_t = self.latent_proj(hx)
 
-            return q, z, hx, cx
+            v = self.values(z_t)
+            adv = self.advantages(z_t)
+            q = v + (adv - adv.mean(dim=1, keepdim=True))
+            
+            return q, hx, cx
 
     # Init Model
     _MODEL = KnowledgeNet(
-            state_dim=18,
-            action_dim=5,
-            feature_dims=[324, 256],
-            lstm_dim=LSTM_H_DIM,
-            forward_dims=[224, 128],
-            inverse_dims=[224, 128]
-        )
+        f_hDim=[324, 256],
+        lstm_hDim=LSTM_H_DIM,
+        for_hDim=[224, 128],
+        inv_hDim=[224, 128]
+    )
 
     # Load weights
     _MODEL.load_state_dict(torch.load(wpath, map_location="cpu"))
@@ -121,7 +127,7 @@ def policy(obs: np.ndarray, rng: np.random.Generator) -> str:
     x = torch.from_numpy(obs.astype(np.float32)).unsqueeze(0)
 
     with torch.no_grad():
-        q, _, _HX, _CX = _MODEL(x, _HX, _CX)
+        q, _HX, _CX = _MODEL(x, _HX, _CX)
 
         _HX = (_HX * DECAY).detach()
         _CX = (_CX * DECAY).detach()
