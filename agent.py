@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import os
 
+# Already set the weights of best model based on achieving success
+
 # Globals
 _MODEL = None
 _HX, _CX = None, None
@@ -27,7 +29,7 @@ def _load_once():
         return
 
     submission_dir = os.path.dirname(__file__)
-    wpath = os.path.join(submission_dir, "weights.pth")
+    wpath = os.path.join(submission_dir, "model_weights/best_weights_on_success_basis.pth")
 
     class KnowledgeNet(nn.Module):
         def __init__( self, state_dim=18, action_dim=5, feature_dims=[256, 256],
