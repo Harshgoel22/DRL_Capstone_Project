@@ -29,7 +29,7 @@ def _load_once():
         return
 
     submission_dir = os.path.dirname(__file__)
-    wpath = os.path.join(submission_dir, "./model_weights/best_weights_on_success_basis.pth")
+    wpath = os.path.join(submission_dir, "./model_weights/best_weights_on_success_basis(final_model_weights).pth")
 
     class KnowledgeNet(nn.Module):
         def __init__(self, inDim=18, outDim=5, f_hDim=[512, 256], lstm_hDim=128,
